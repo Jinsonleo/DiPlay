@@ -7,6 +7,7 @@ import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -31,6 +32,7 @@ internal object CarPlayMediaKeys {
     private var controller: CarPlayController? = null
     private var session: MediaSession? = null
     private var focusRequest: AudioFocusRequest? = null
+    private var focusListener: AudioManager.OnAudioFocusChangeListener? = null
     private var focusHeld = false
     private var appContext: Context? = null
 
@@ -65,10 +67,9 @@ internal object CarPlayMediaKeys {
     // keys. When CarPlay starts playing again it becomes the car's media source again, as any player
     // would; only the start counts, so a car source picked while the iPhone plays on is not undone.
     private fun regainFocusLocked() {
-        val request = focusRequest ?: return
-        if (focusHeld) return
+        if (focusListener == null || focusHeld) return
         val audio = appContext?.getSystemService(AudioManager::class.java) ?: return
-        focusHeld = audio.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        focusHeld = requestFocus(audio)
         Log.i(TAG, "audio focus regained=$focusHeld")
     }
 
@@ -84,23 +85,33 @@ internal object CarPlayMediaKeys {
         )
     }
 
+    private fun requestFocus(audio: AudioManager): Boolean {
+        val listener = focusListener ?: return false
+        val result = focusRequest?.let { audio.requestAudioFocus(it) }
+            ?: @Suppress("DEPRECATION") audio.requestAudioFocus(listener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
+        return result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+    }
+
     private fun start(context: Context) {
         val audio = context.getSystemService(AudioManager::class.java)
-        val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                    .build(),
-            )
-            .setOnAudioFocusChangeListener({ change ->
-                Log.i(TAG, "audio focus change=$change")
-                // Only a permanent loss moves the car's media keys elsewhere; transient losses come back.
-                if (change == AudioManager.AUDIOFOCUS_LOSS) synchronized(this) { focusHeld = false }
-            }, mainHandler)
-            .build()
-        val granted = audio?.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-        focusRequest = request
+        val listener = AudioManager.OnAudioFocusChangeListener { change ->
+            Log.i(TAG, "audio focus change=$change")
+            // Only a permanent loss moves the car's media keys elsewhere; transient losses come back.
+            if (change == AudioManager.AUDIOFOCUS_LOSS) synchronized(this) { focusHeld = false }
+        }
+        focusListener = listener
+        focusRequest = if (Build.VERSION.SDK_INT >= 26) {
+            AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build(),
+                )
+                .setOnAudioFocusChangeListener(listener, mainHandler)
+                .build()
+        } else null
+        val granted = audio != null && requestFocus(audio)
         focusHeld = granted
         session = MediaSession(context, "DiPlay CarPlay").apply {
             setCallback(callback, mainHandler)
@@ -115,8 +126,11 @@ internal object CarPlayMediaKeys {
             it.release()
         }
         session = null
-        focusRequest?.let { request -> appContext?.getSystemService(AudioManager::class.java)?.abandonAudioFocusRequest(request) }
+        val audio = appContext?.getSystemService(AudioManager::class.java)
+        focusRequest?.let { audio?.abandonAudioFocusRequest(it) }
+            ?: focusListener?.let { @Suppress("DEPRECATION") audio?.abandonAudioFocus(it) }
         focusRequest = null
+        focusListener = null
         focusHeld = false
     }
 

@@ -3294,7 +3294,7 @@ class CarPlayHostActivity : ComponentActivity() {
             }
         }
         try {
-            startForegroundService(Intent(this, DiPlaySessionService::class.java))
+            Intent(this, DiPlaySessionService::class.java).let { if (Build.VERSION.SDK_INT >= 26) startForegroundService(it) else startService(it) }
             next.start()
         } catch (error: RuntimeException) {
             appendLog("Connection could not start: ${error.javaClass.simpleName}")
