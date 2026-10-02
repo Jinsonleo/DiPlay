@@ -1,3 +1,6 @@
+import com.android.build.api.artifact.SingleArtifact
+import com.android.build.api.dsl.ApplicationExtension
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -61,4 +64,23 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     debugImplementation(libs.androidx.compose.ui.tooling)
+}
+
+// Copy the release APK to build/dist with a distribution-friendly name.
+val releaseVersionName = extensions.getByType<ApplicationExtension>().defaultConfig.versionName
+androidComponents {
+    onVariants(selector().withBuildType("release")) { variant ->
+        val apkDir = variant.artifacts.get(SingleArtifact.APK)
+        val apkName = "DiPlay-$releaseVersionName-Jinson.apk"
+        val copyReleaseApk = tasks.register<Copy>("copyReleaseApk") {
+            from(apkDir) {
+                include("*.apk")
+            }
+            into(layout.buildDirectory.dir("dist"))
+            rename { apkName }
+        }
+        tasks.matching { it.name == "assembleRelease" }.configureEach {
+            finalizedBy(copyReleaseApk)
+        }
+    }
 }
